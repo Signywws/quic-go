@@ -129,6 +129,7 @@ func populateConfig(config *Config) *Config {
 		InitialPacketSize:                initialPacketSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		LossDetectionPacketThreshold:     lossDetectionPacketThreshold,
+		EnableAdaptiveLossDetection:      config.EnableAdaptiveLossDetection,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		Allow0RTT:                        config.Allow0RTT,
 		Tracer:                           config.Tracer,

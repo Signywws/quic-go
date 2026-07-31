@@ -130,6 +130,8 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(true))
 		case "LossDetectionPacketThreshold":
 			f.Set(reflect.ValueOf(uint64(20)))
+		case "EnableAdaptiveLossDetection":
+			f.SetBool(true)
 		default:
 			t.Fatalf("all fields must be accounted for, but saw unknown field %q", fn)
 		}
@@ -199,4 +201,5 @@ func TestConfigZeroLimits(t *testing.T) {
 	c := populateConfig(config)
 	require.Zero(t, c.MaxIncomingStreams)
 	require.Zero(t, c.MaxIncomingUniStreams)
+	require.False(t, c.EnableAdaptiveLossDetection)
 }

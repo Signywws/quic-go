@@ -16,11 +16,17 @@ import (
 )
 
 const (
+
 	// Maximum reordering in time space before time based loss detection considers a packet lost.
 	// Specified as an RTT multiplier.
-	timeThreshold = 9.0 / 8
+	defaultTimeThreshold = 9.0 / 8
 	// Maximum reordering in packets before packet threshold loss detection considers a packet lost.
-	defaultPacketThreshold = 3
+	defaultPacketThreshold                                 = 3
+	adaptivePacketThresholdMinMargin protocol.PacketNumber = 8
+	maxAdaptivePacketThreshold       protocol.PacketNumber = 64 * 1024
+
+	adaptiveTimeThresholdSafetyMultiplier = 1.25
+	maxAdaptiveTimeThreshold              = 4.0
 	// Before validating the client's address, the server won't send more than 3x bytes than it received.
 	amplificationFactor = 3
 	// We use Retry packets to derive an RTT estimate. Make sure we don't set the RTT to a super low value yet.
@@ -89,10 +95,13 @@ type sentPacketHandler struct {
 
 	bytesInFlight protocol.ByteCount
 
-	congestion      congestion.SendAlgorithmWithDebugInfos
-	rttStats        *utils.RTTStats
-	connStats       *utils.ConnectionStats
-	packetThreshold protocol.PacketNumber
+	congestion congestion.SendAlgorithmWithDebugInfos
+	rttStats   *utils.RTTStats
+	connStats  *utils.ConnectionStats
+
+	packetThreshold       protocol.PacketNumber
+	timeThreshold         float64
+	adaptiveLossDetection bool
 
 	// The number of times a PTO has been sent without receiving an ack.
 	ptoCount uint32
@@ -124,6 +133,62 @@ func WithPacketThreshold(threshold protocol.PacketNumber) SentPacketHandlerOptio
 			handler.packetThreshold = threshold
 		}
 	}
+}
+
+func WithAdaptiveLossDetection(enabled bool) SentPacketHandlerOption {
+	return func(handler *sentPacketHandler) {
+		handler.adaptiveLossDetection = enabled
+	}
+}
+
+// adaptLossDetectionThresholds increases loss detection thresholds after
+// a confirmed spurious loss. Thresholds never decrease during a connection.
+func (h *sentPacketHandler) adaptLossDetectionThresholds(
+	packetReordering protocol.PacketNumber,
+	timeReordering time.Duration,
+	rtt time.Duration,
+) bool {
+	if !h.adaptiveLossDetection {
+		return false
+	}
+
+	changed := false
+
+	if packetReordering > 0 {
+		var targetPacketThreshold protocol.PacketNumber
+
+		if packetReordering >= maxAdaptivePacketThreshold {
+			targetPacketThreshold = maxAdaptivePacketThreshold
+		} else {
+			margin := max(
+				adaptivePacketThresholdMinMargin,
+				packetReordering/4,
+			)
+
+			targetPacketThreshold = min(
+				maxAdaptivePacketThreshold,
+				packetReordering+margin,
+			)
+		}
+
+		if targetPacketThreshold > h.packetThreshold {
+			h.packetThreshold = targetPacketThreshold
+			changed = true
+		}
+	}
+
+	if timeReordering > 0 && rtt > 0 {
+		observedTimeThreshold := float64(timeReordering) / float64(rtt)
+
+		targetTimeThreshold := min(maxAdaptiveTimeThreshold, observedTimeThreshold*adaptiveTimeThresholdSafetyMultiplier)
+
+		if targetTimeThreshold > h.timeThreshold {
+			h.timeThreshold = targetTimeThreshold
+			changed = true
+		}
+	}
+
+	return changed
 }
 
 // clientAddressValidated indicates whether the address was validated beforehand by an address validation token.
@@ -165,6 +230,7 @@ func NewSentPacketHandler(
 		qlogger:                        qlogger,
 		logger:                         logger,
 		packetThreshold:                defaultPacketThreshold,
+		timeThreshold:                  defaultTimeThreshold,
 	}
 	for _, option := range options {
 		option(h)
@@ -533,6 +599,62 @@ func (h *sentPacketHandler) detectSpuriousLosses(ack *wire.AckFrame, ackTime mon
 			spuriousLosses = append(spuriousLosses, pn)
 		}
 	}
+
+	if len(spuriousLosses) > 0 {
+		previousPacketThreshold := h.packetThreshold
+		previousTimeThreshold := h.timeThreshold
+
+		rtt := max(
+			h.rttStats.LatestRTT(),
+			h.rttStats.SmoothedRTT(),
+		)
+
+		changed := h.adaptLossDetectionThresholds(
+			maxPacketReordering,
+			maxTimeReordering,
+			rtt,
+		)
+
+		if changed {
+			if h.qlogger != nil {
+				h.qlogger.RecordEvent(
+					qlog.LossDetectionThresholdsUpdated{
+						PreviousPacketThreshold: uint64(
+							previousPacketThreshold,
+						),
+						PacketThreshold: uint64(
+							h.packetThreshold,
+						),
+						PreviousTimeThreshold: previousTimeThreshold,
+						TimeThreshold:         h.timeThreshold,
+						PacketReordering: uint64(
+							maxPacketReordering,
+						),
+						TimeReordering: maxTimeReordering,
+						RTT:            rtt,
+					},
+				)
+			}
+
+			if h.logger.Debug() {
+				h.logger.Debugf(
+					"adapted loss detection thresholds: "+
+						"packet %d -> %d, "+
+						"time %.3f -> %.3f RTT, "+
+						"packet reordering: %d, "+
+						"time reordering: %s, RTT: %s",
+					previousPacketThreshold,
+					h.packetThreshold,
+					previousTimeThreshold,
+					h.timeThreshold,
+					maxPacketReordering,
+					maxTimeReordering,
+					rtt,
+				)
+			}
+		}
+	}
+
 	for _, pn := range spuriousLosses {
 		h.lostPackets.Delete(pn)
 	}
@@ -805,7 +927,7 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 	pnSpace.lossTime = 0
 
 	maxRTT := float64(max(h.rttStats.LatestRTT(), h.rttStats.SmoothedRTT()))
-	lossDelay := time.Duration(timeThreshold * maxRTT)
+	lossDelay := time.Duration(h.timeThreshold * maxRTT)
 
 	// Minimum time of granularity before packets are deemed lost.
 	lossDelay = max(lossDelay, protocol.TimerGranularity)

@@ -1786,7 +1786,14 @@ func TestSentPacketHandlerUsesCustomPacketThreshold(t *testing.T) {
 		nil,
 		utils.DefaultLogger,
 		WithPacketThreshold(threshold),
+		WithAdaptiveLossDetection(true),
 	)
+
+	handler := sph.(*sentPacketHandler)
+
+	require.Equal(t, threshold, handler.packetThreshold)
+	require.Equal(t, defaultTimeThreshold, handler.timeThreshold)
+	require.True(t, handler.adaptiveLossDetection)
 
 	var packets packetTracker
 	now := monotime.Now()
@@ -1834,4 +1841,185 @@ func TestSentPacketHandlerUsesCustomPacketThreshold(t *testing.T) {
 		[]protocol.PacketNumber{packetNumbers[0]},
 		packets.Lost,
 	)
+}
+
+func TestAdaptLossDetectionThresholds(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		handler := &sentPacketHandler{
+			packetThreshold:       defaultPacketThreshold,
+			timeThreshold:         defaultTimeThreshold,
+			adaptiveLossDetection: false,
+		}
+
+		changed := handler.adaptLossDetectionThresholds(
+			400,
+			150*time.Millisecond,
+			100*time.Millisecond,
+		)
+
+		require.False(t, changed)
+		require.Equal(
+			t,
+			protocol.PacketNumber(defaultPacketThreshold),
+			handler.packetThreshold,
+		)
+		require.Equal(
+			t,
+			defaultTimeThreshold,
+			handler.timeThreshold,
+		)
+	})
+
+	t.Run("increases packet and time thresholds", func(t *testing.T) {
+		handler := &sentPacketHandler{
+			packetThreshold:       defaultPacketThreshold,
+			timeThreshold:         defaultTimeThreshold,
+			adaptiveLossDetection: true,
+		}
+
+		changed := handler.adaptLossDetectionThresholds(
+			400,
+			150*time.Millisecond,
+			100*time.Millisecond,
+		)
+
+		require.True(t, changed)
+
+		// 400 + 25% safety margin.
+		require.Equal(
+			t,
+			protocol.PacketNumber(500),
+			handler.packetThreshold,
+		)
+
+		// 1.5 RTT * 1.25 safety multiplier.
+		require.InDelta(
+			t,
+			1.875,
+			handler.timeThreshold,
+			0.0001,
+		)
+	})
+
+	t.Run("never decreases thresholds", func(t *testing.T) {
+		handler := &sentPacketHandler{
+			packetThreshold:       500,
+			timeThreshold:         2,
+			adaptiveLossDetection: true,
+		}
+
+		changed := handler.adaptLossDetectionThresholds(
+			20,
+			120*time.Millisecond,
+			100*time.Millisecond,
+		)
+
+		require.False(t, changed)
+		require.Equal(
+			t,
+			protocol.PacketNumber(500),
+			handler.packetThreshold,
+		)
+		require.Equal(t, 2.0, handler.timeThreshold)
+	})
+
+	t.Run("caps thresholds", func(t *testing.T) {
+		handler := &sentPacketHandler{
+			packetThreshold:       defaultPacketThreshold,
+			timeThreshold:         defaultTimeThreshold,
+			adaptiveLossDetection: true,
+		}
+
+		changed := handler.adaptLossDetectionThresholds(
+			maxAdaptivePacketThreshold+1000,
+			10*time.Second,
+			time.Second,
+		)
+
+		require.True(t, changed)
+		require.Equal(
+			t,
+			maxAdaptivePacketThreshold,
+			handler.packetThreshold,
+		)
+		require.Equal(
+			t,
+			maxAdaptiveTimeThreshold,
+			handler.timeThreshold,
+		)
+	})
+}
+
+func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
+	const rtt = 100 * time.Millisecond
+	var eventRecorder events.Recorder
+
+	rttStats := utils.NewRTTStats()
+	rttStats.UpdateRTT(rtt, 0)
+
+	handler := &sentPacketHandler{
+		appDataPackets:        newPacketNumberSpace(0, true),
+		lostPackets:           *newLostPacketTracker(64),
+		rttStats:              rttStats,
+		logger:                utils.DefaultLogger,
+		packetThreshold:       defaultPacketThreshold,
+		timeThreshold:         defaultTimeThreshold,
+		adaptiveLossDetection: true,
+		qlogger:               &eventRecorder,
+	}
+
+	sendTime := monotime.Now()
+
+	// Пакет 10 ранее был признан потерянным.
+	handler.lostPackets.Add(10, sendTime)
+
+	// Поздний ACK подтверждает, что пакет 10 всё-таки был доставлен.
+	// Между packet number 10 и 50 находится 40 позиций.
+	handler.detectSpuriousLosses(
+		&wire.AckFrame{
+			AckRanges: []wire.AckRange{
+				{
+					Smallest: 10,
+					Largest:  50,
+				},
+			},
+		},
+		sendTime.Add(150*time.Millisecond),
+	)
+
+	// 40 + 25% = 50.
+	require.Equal(
+		t,
+		protocol.PacketNumber(50),
+		handler.packetThreshold,
+	)
+
+	// 150 ms / 100 ms = 1.5 RTT; 1.5 * 1.25 = 1.875 RTT.
+	require.InDelta(
+		t,
+		1.875,
+		handler.timeThreshold,
+		0.0001,
+	)
+
+	require.Equal(
+		t,
+		[]qlogwriter.Event{
+			qlog.LossDetectionThresholdsUpdated{
+				PreviousPacketThreshold: 3,
+				PacketThreshold:         50,
+				PreviousTimeThreshold:   defaultTimeThreshold,
+				TimeThreshold:           1.875,
+				PacketReordering:        40,
+				TimeReordering:          150 * time.Millisecond,
+				RTT:                     100 * time.Millisecond,
+			},
+		},
+		eventRecorder.Events(
+			qlog.LossDetectionThresholdsUpdated{},
+		),
+	)
+
+	// Запись удаляется после подтверждения ложной потери.
+	require.Empty(t, handler.lostPackets.lostPackets)
 }

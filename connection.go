@@ -324,6 +324,9 @@ var newConnection = func(
 		ackhandler.WithPacketThreshold(
 			protocol.PacketNumber(s.config.LossDetectionPacketThreshold),
 		),
+		ackhandler.WithAdaptiveLossDetection(
+			s.config.EnableAdaptiveLossDetection,
+		),
 	)
 	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
 	statelessResetToken := statelessResetter.GetStatelessResetToken(srcConnID)
@@ -455,6 +458,9 @@ var newClientConnection = func(
 		s.logger,
 		ackhandler.WithPacketThreshold(
 			protocol.PacketNumber(s.config.LossDetectionPacketThreshold),
+		),
+		ackhandler.WithAdaptiveLossDetection(
+			s.config.EnableAdaptiveLossDetection,
 		),
 	)
 	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))

@@ -171,6 +171,10 @@ type Config struct {
 	// that must be acknowledged before an outstanding packet is declared lost.
 	// If zero, it defaults to 3, as recommended by RFC 9002.
 	LossDetectionPacketThreshold uint64
+	// EnableAdaptiveLossDetection allows QUIC to increase packet and time
+	// loss detection thresholds after confirmed spurious losses.
+	// It is disabled by default.
+	EnableAdaptiveLossDetection bool
 	// Allow0RTT allows the application to decide if a 0-RTT connection attempt should be accepted.
 	// Only valid for the server.
 	Allow0RTT bool

@@ -693,6 +693,67 @@ func TestSpuriousLoss(t *testing.T) {
 	require.InDelta(t, 1337, ev["reordering_time"], float64(1))
 }
 
+func TestLossDetectionThresholdsUpdated(t *testing.T) {
+	name, ev := testEventEncoding(
+		t,
+		&LossDetectionThresholdsUpdated{
+			PreviousPacketThreshold: 3,
+			PacketThreshold:         500,
+			PreviousTimeThreshold:   1.125,
+			TimeThreshold:           1.875,
+			PacketReordering:        400,
+			TimeReordering:          150 * time.Millisecond,
+			RTT:                     100 * time.Millisecond,
+		},
+	)
+
+	require.Equal(
+		t,
+		"recovery:loss_detection_thresholds_updated",
+		name,
+	)
+
+	require.Equal(
+		t,
+		float64(3),
+		ev["previous_packet_threshold"],
+	)
+	require.Equal(
+		t,
+		float64(500),
+		ev["packet_threshold"],
+	)
+	require.InDelta(
+		t,
+		1.125,
+		ev["previous_time_threshold_rtt"],
+		0.0001,
+	)
+	require.InDelta(
+		t,
+		1.875,
+		ev["time_threshold_rtt"],
+		0.0001,
+	)
+	require.Equal(
+		t,
+		float64(400),
+		ev["observed_packet_reordering"],
+	)
+	require.InDelta(
+		t,
+		150,
+		ev["observed_time_reordering"],
+		0.001,
+	)
+	require.InDelta(
+		t,
+		100,
+		ev["rtt"],
+		0.001,
+	)
+}
+
 func TestMTUUpdated(t *testing.T) {
 	name, ev := testEventEncoding(t, &MTUUpdated{
 		Value: 1337,

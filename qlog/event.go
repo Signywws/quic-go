@@ -543,6 +543,56 @@ func (e SpuriousLoss) Encode(enc *jsontext.Encoder, _ time.Time) error {
 	return h.err
 }
 
+type LossDetectionThresholdsUpdated struct {
+	PreviousPacketThreshold uint64
+	PacketThreshold         uint64
+
+	PreviousTimeThreshold float64
+	TimeThreshold         float64
+
+	PacketReordering uint64
+	TimeReordering   time.Duration
+	RTT              time.Duration
+}
+
+func (e LossDetectionThresholdsUpdated) Name() string {
+	return "recovery:loss_detection_thresholds_updated"
+}
+
+func (e LossDetectionThresholdsUpdated) Encode(
+	enc *jsontext.Encoder,
+	_ time.Time,
+) error {
+	h := encoderHelper{enc: enc}
+
+	h.WriteToken(jsontext.BeginObject)
+
+	h.WriteToken(jsontext.String("previous_packet_threshold"))
+	h.WriteToken(jsontext.Uint(e.PreviousPacketThreshold))
+
+	h.WriteToken(jsontext.String("packet_threshold"))
+	h.WriteToken(jsontext.Uint(e.PacketThreshold))
+
+	h.WriteToken(jsontext.String("previous_time_threshold_rtt"))
+	h.WriteToken(jsontext.Float(e.PreviousTimeThreshold))
+
+	h.WriteToken(jsontext.String("time_threshold_rtt"))
+	h.WriteToken(jsontext.Float(e.TimeThreshold))
+
+	h.WriteToken(jsontext.String("observed_packet_reordering"))
+	h.WriteToken(jsontext.Uint(e.PacketReordering))
+
+	h.WriteToken(jsontext.String("observed_time_reordering"))
+	h.WriteToken(jsontext.Float(milliseconds(e.TimeReordering)))
+
+	h.WriteToken(jsontext.String("rtt"))
+	h.WriteToken(jsontext.Float(milliseconds(e.RTT)))
+
+	h.WriteToken(jsontext.EndObject)
+
+	return h.err
+}
+
 type KeyUpdated struct {
 	Trigger  KeyUpdateTrigger
 	KeyType  KeyType
