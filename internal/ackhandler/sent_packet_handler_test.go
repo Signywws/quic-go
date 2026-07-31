@@ -1885,10 +1885,10 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 
 		require.True(t, changed)
 
-		// 400 + 25% safety margin.
+		// The observed packet reordering is doubled.
 		require.Equal(
 			t,
-			protocol.PacketNumber(500),
+			protocol.PacketNumber(800),
 			handler.packetThreshold,
 		)
 
@@ -1950,6 +1950,34 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 	})
 }
 
+func TestGrowPacketThreshold(t *testing.T) {
+	t.Run("doubles threshold", func(t *testing.T) {
+		require.Equal(
+			t,
+			protocol.PacketNumber(80),
+			growPacketThreshold(40),
+		)
+	})
+
+	t.Run("caps threshold", func(t *testing.T) {
+		require.Equal(
+			t,
+			maxAdaptivePacketThreshold,
+			growPacketThreshold(
+				maxAdaptivePacketThreshold,
+			),
+		)
+
+		require.Equal(
+			t,
+			maxAdaptivePacketThreshold,
+			growPacketThreshold(
+				maxAdaptivePacketThreshold/2+1,
+			),
+		)
+	})
+}
+
 func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 	const rtt = 100 * time.Millisecond
 	var eventRecorder events.Recorder
@@ -1987,10 +2015,10 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 		sendTime.Add(150*time.Millisecond),
 	)
 
-	// 40 + 25% = 50.
+	// max(3 * 2, 40 * 2) = 80.
 	require.Equal(
 		t,
-		protocol.PacketNumber(50),
+		protocol.PacketNumber(80),
 		handler.packetThreshold,
 	)
 
@@ -2007,7 +2035,7 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 		[]qlogwriter.Event{
 			qlog.LossDetectionThresholdsUpdated{
 				PreviousPacketThreshold: 3,
-				PacketThreshold:         50,
+				PacketThreshold:         80,
 				PreviousTimeThreshold:   defaultTimeThreshold,
 				TimeThreshold:           1.875,
 				PacketReordering:        40,

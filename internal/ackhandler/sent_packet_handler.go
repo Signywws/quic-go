@@ -16,14 +16,14 @@ import (
 )
 
 const (
-
 	// Maximum reordering in time space before time based loss detection considers a packet lost.
 	// Specified as an RTT multiplier.
 	defaultTimeThreshold = 9.0 / 8
 	// Maximum reordering in packets before packet threshold loss detection considers a packet lost.
-	defaultPacketThreshold                                 = 3
-	adaptivePacketThresholdMinMargin protocol.PacketNumber = 8
-	maxAdaptivePacketThreshold       protocol.PacketNumber = 64 * 1024
+	defaultPacketThreshold protocol.PacketNumber = 3
+
+	adaptivePacketThresholdGrowthFactor protocol.PacketNumber = 2
+	maxAdaptivePacketThreshold          protocol.PacketNumber = 64 * 1024
 
 	adaptiveTimeThresholdSafetyMultiplier = 1.25
 	maxAdaptiveTimeThreshold              = 4.0
@@ -141,6 +141,18 @@ func WithAdaptiveLossDetection(enabled bool) SentPacketHandlerOption {
 	}
 }
 
+// growPacketThreshold exponentially increases the packet threshold while
+// preventing overflow and respecting the configured upper limit.
+func growPacketThreshold(
+	threshold protocol.PacketNumber,
+) protocol.PacketNumber {
+	if threshold >= maxAdaptivePacketThreshold/adaptivePacketThresholdGrowthFactor {
+		return maxAdaptivePacketThreshold
+	}
+
+	return threshold * adaptivePacketThresholdGrowthFactor
+}
+
 // adaptLossDetectionThresholds increases loss detection thresholds after
 // a confirmed spurious loss. Thresholds never decrease during a connection.
 func (h *sentPacketHandler) adaptLossDetectionThresholds(
@@ -154,22 +166,11 @@ func (h *sentPacketHandler) adaptLossDetectionThresholds(
 
 	changed := false
 
-	if packetReordering > 0 {
-		var targetPacketThreshold protocol.PacketNumber
-
-		if packetReordering >= maxAdaptivePacketThreshold {
-			targetPacketThreshold = maxAdaptivePacketThreshold
-		} else {
-			margin := max(
-				adaptivePacketThresholdMinMargin,
-				packetReordering/4,
-			)
-
-			targetPacketThreshold = min(
-				maxAdaptivePacketThreshold,
-				packetReordering+margin,
-			)
-		}
+	if packetReordering >= h.packetThreshold {
+		targetPacketThreshold := max(
+			growPacketThreshold(h.packetThreshold),
+			growPacketThreshold(packetReordering),
+		)
 
 		if targetPacketThreshold > h.packetThreshold {
 			h.packetThreshold = targetPacketThreshold
