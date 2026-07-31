@@ -18,7 +18,8 @@ import (
 const (
 	// Maximum reordering in time space before time based loss detection considers a packet lost.
 	// Specified as an RTT multiplier.
-	defaultTimeThreshold = 9.0 / 8
+	defaultTimeThreshold         = 9.0 / 8
+	adaptiveInitialTimeThreshold = 1.5
 	// Maximum reordering in packets before packet threshold loss detection considers a packet lost.
 	defaultPacketThreshold protocol.PacketNumber = 3
 
@@ -138,6 +139,11 @@ func WithPacketThreshold(threshold protocol.PacketNumber) SentPacketHandlerOptio
 func WithAdaptiveLossDetection(enabled bool) SentPacketHandlerOption {
 	return func(handler *sentPacketHandler) {
 		handler.adaptiveLossDetection = enabled
+
+		if enabled &&
+			handler.timeThreshold < adaptiveInitialTimeThreshold {
+			handler.timeThreshold = adaptiveInitialTimeThreshold
+		}
 	}
 }
 

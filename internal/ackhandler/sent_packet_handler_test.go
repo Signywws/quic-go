@@ -1792,7 +1792,7 @@ func TestSentPacketHandlerUsesCustomPacketThreshold(t *testing.T) {
 	handler := sph.(*sentPacketHandler)
 
 	require.Equal(t, threshold, handler.packetThreshold)
-	require.Equal(t, defaultTimeThreshold, handler.timeThreshold)
+	require.Equal(t, adaptiveInitialTimeThreshold, handler.timeThreshold)
 	require.True(t, handler.adaptiveLossDetection)
 
 	var packets packetTracker
@@ -1991,7 +1991,7 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 		rttStats:              rttStats,
 		logger:                utils.DefaultLogger,
 		packetThreshold:       defaultPacketThreshold,
-		timeThreshold:         defaultTimeThreshold,
+		timeThreshold:         adaptiveInitialTimeThreshold,
 		adaptiveLossDetection: true,
 		qlogger:               &eventRecorder,
 	}
@@ -2036,7 +2036,7 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 			qlog.LossDetectionThresholdsUpdated{
 				PreviousPacketThreshold: 3,
 				PacketThreshold:         80,
-				PreviousTimeThreshold:   defaultTimeThreshold,
+				PreviousTimeThreshold:   adaptiveInitialTimeThreshold,
 				TimeThreshold:           1.875,
 				PacketReordering:        40,
 				TimeReordering:          150 * time.Millisecond,
