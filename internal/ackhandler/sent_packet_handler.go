@@ -20,7 +20,7 @@ const (
 	// Specified as an RTT multiplier.
 	timeThreshold = 9.0 / 8
 	// Maximum reordering in packets before packet threshold loss detection considers a packet lost.
-	packetThreshold = 3
+	defaultPacketThreshold = 3
 	// Before validating the client's address, the server won't send more than 3x bytes than it received.
 	amplificationFactor = 3
 	// We use Retry packets to derive an RTT estimate. Make sure we don't set the RTT to a super low value yet.
@@ -89,9 +89,10 @@ type sentPacketHandler struct {
 
 	bytesInFlight protocol.ByteCount
 
-	congestion congestion.SendAlgorithmWithDebugInfos
-	rttStats   *utils.RTTStats
-	connStats  *utils.ConnectionStats
+	congestion      congestion.SendAlgorithmWithDebugInfos
+	rttStats        *utils.RTTStats
+	connStats       *utils.ConnectionStats
+	packetThreshold protocol.PacketNumber
 
 	// The number of times a PTO has been sent without receiving an ack.
 	ptoCount uint32
@@ -115,6 +116,16 @@ type sentPacketHandler struct {
 
 var _ SentPacketHandler = &sentPacketHandler{}
 
+type SentPacketHandlerOption func(*sentPacketHandler)
+
+func WithPacketThreshold(threshold protocol.PacketNumber) SentPacketHandlerOption {
+	return func(handler *sentPacketHandler) {
+		if threshold > 0 {
+			handler.packetThreshold = threshold
+		}
+	}
+}
+
 // clientAddressValidated indicates whether the address was validated beforehand by an address validation token.
 // If the address was validated, the amplification limit doesn't apply. It has no effect for a client.
 func NewSentPacketHandler(
@@ -128,6 +139,7 @@ func NewSentPacketHandler(
 	pers protocol.Perspective,
 	qlogger qlogwriter.Recorder,
 	logger utils.Logger,
+	options ...SentPacketHandlerOption,
 ) SentPacketHandler {
 	congestion := congestion.NewCubicSender(
 		congestion.DefaultClock{},
@@ -152,6 +164,10 @@ func NewSentPacketHandler(
 		perspective:                    pers,
 		qlogger:                        qlogger,
 		logger:                         logger,
+		packetThreshold:                defaultPacketThreshold,
+	}
+	for _, option := range options {
+		option(h)
 	}
 	if enableECN {
 		h.enableECN = true
@@ -820,7 +836,7 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 					})
 				}
 			}
-		} else if pnSpace.history.Difference(pnSpace.largestAcked, pn) >= packetThreshold {
+		} else if pnSpace.history.Difference(pnSpace.largestAcked, pn) >= h.packetThreshold {
 			packetLost = true
 			if !p.isPathProbePacket && p.IsAckEliciting() {
 				if h.logger.Debug() {

@@ -54,6 +54,8 @@ func validateConfig(config *Config) error {
 	return nil
 }
 
+const defaultLossDetectionPacketThreshold uint64 = 3
+
 // populateConfig populates fields in the quic.Config with their default values, if none are set
 // it may be called with nil
 func populateConfig(config *Config) *Config {
@@ -104,6 +106,10 @@ func populateConfig(config *Config) *Config {
 	if initialPacketSize == 0 {
 		initialPacketSize = protocol.InitialPacketSize
 	}
+	lossDetectionPacketThreshold := config.LossDetectionPacketThreshold
+	if lossDetectionPacketThreshold == 0 {
+		lossDetectionPacketThreshold = defaultLossDetectionPacketThreshold
+	}
 
 	return &Config{
 		GetConfigForClient:               config.GetConfigForClient,
@@ -122,6 +128,7 @@ func populateConfig(config *Config) *Config {
 		EnableDatagrams:                  config.EnableDatagrams,
 		InitialPacketSize:                initialPacketSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
+		LossDetectionPacketThreshold:     lossDetectionPacketThreshold,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		Allow0RTT:                        config.Allow0RTT,
 		Tracer:                           config.Tracer,

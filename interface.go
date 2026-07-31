@@ -167,6 +167,10 @@ type Config struct {
 	// This allows the sending of QUIC packets that fully utilize the available MTU of the path.
 	// Path MTU discovery is only available on systems that allow setting of the Don't Fragment (DF) bit.
 	DisablePathMTUDiscovery bool
+	// LossDetectionPacketThreshold is the number of higher-numbered packets
+	// that must be acknowledged before an outstanding packet is declared lost.
+	// If zero, it defaults to 3, as recommended by RFC 9002.
+	LossDetectionPacketThreshold uint64
 	// Allow0RTT allows the application to decide if a 0-RTT connection attempt should be accepted.
 	// Only valid for the server.
 	Allow0RTT bool

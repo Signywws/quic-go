@@ -1770,3 +1770,68 @@ func benchmarkSendAndAcknowledge(b *testing.B, ackEvery, inFlight int) {
 		}
 	}
 }
+
+func TestSentPacketHandlerUsesCustomPacketThreshold(t *testing.T) {
+	const threshold protocol.PacketNumber = 20
+
+	sph := NewSentPacketHandler(
+		0,
+		1200,
+		utils.NewRTTStats(),
+		&utils.ConnectionStats{},
+		false,
+		false,
+		nil,
+		protocol.PerspectiveClient,
+		nil,
+		utils.DefaultLogger,
+		WithPacketThreshold(threshold),
+	)
+
+	var packets packetTracker
+	now := monotime.Now()
+	packetNumbers := make([]protocol.PacketNumber, 0, threshold+1)
+
+	for range threshold + 1 {
+		packetNumber := sph.PopPacketNumber(protocol.EncryptionInitial)
+
+		sph.SentPacket(
+			now,
+			packetNumber,
+			protocol.InvalidPacketNumber,
+			nil,
+			[]Frame{packets.NewPingFrame(packetNumber)},
+			protocol.EncryptionInitial,
+			protocol.ECNNon,
+			1200,
+			false,
+			false,
+		)
+
+		packetNumbers = append(packetNumbers, packetNumber)
+	}
+
+	_, err := sph.ReceivedAck(
+		&wire.AckFrame{
+			AckRanges: ackRanges(packetNumbers[threshold-1]),
+		},
+		protocol.EncryptionInitial,
+		now,
+	)
+	require.NoError(t, err)
+	require.Empty(t, packets.Lost)
+
+	_, err = sph.ReceivedAck(
+		&wire.AckFrame{
+			AckRanges: ackRanges(packetNumbers[threshold]),
+		},
+		protocol.EncryptionInitial,
+		now,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]protocol.PacketNumber{packetNumbers[0]},
+		packets.Lost,
+	)
+}
