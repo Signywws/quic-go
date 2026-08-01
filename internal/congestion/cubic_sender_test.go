@@ -427,17 +427,16 @@ func TestCubicSender1ConnectionCongestionAvoidanceAtEndOfRecovery(t *testing.T) 
 	}
 	require.False(t, sender.sender.InRecovery())
 
-	// Out of recovery now. Congestion window should not grow during RTT.
-	for i := protocol.ByteCount(0); i < expectedSendWindow/maxDatagramSize-2; i += 2 {
-		// Send our full send window.
-		sender.SendAvailableSendWindow()
-		sender.AckNPackets(2)
-		require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
-	}
+	// Out of recovery now. Congestion window should not grow until a full
+	// congestion window worth of packets has been acknowledged.
+	packetsUntilGrowth := int(expectedSendWindow/maxDatagramSize) - int(sender.sender.numAckedPackets)
+	sender.SendAvailableSendWindow()
+	sender.AckNPackets(packetsUntilGrowth - 1)
+	require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
 
 	// Next ack should cause congestion window to grow by 1MSS.
 	sender.SendAvailableSendWindow()
-	sender.AckNPackets(2)
+	sender.AckNPackets(1)
 	expectedSendWindow += maxDatagramSize
 	require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
 }
@@ -449,8 +448,9 @@ func TestCubicSenderNoPRR(t *testing.T) {
 	sender.LoseNPackets(9)
 	sender.AckNPackets(1)
 
-	require.Equal(t, protocol.ByteCount(renoBeta*float32(defaultWindowTCP)), sender.sender.GetCongestionWindow())
-	windowInPackets := int(renoBeta * float32(defaultWindowTCP) / float32(maxDatagramSize))
+	expectedWindow := protocol.ByteCount(float64(defaultWindowTCP) * renoBeta)
+	require.Equal(t, expectedWindow, sender.sender.GetCongestionWindow())
+	windowInPackets := int((expectedWindow + maxDatagramSize - 1) / maxDatagramSize)
 	numSent := sender.SendAvailableSendWindow()
 	require.Equal(t, windowInPackets, numSent)
 }
