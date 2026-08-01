@@ -282,11 +282,11 @@ func TestRenoCongestionAvoidanceGrowth(t *testing.T) {
 
 	require.Equal(
 		t,
-		uint64(20),
+		uint64(40),
 		sender.sender.renoCongestionAvoidanceAckThreshold(),
 	)
 
-	sender.AckNPackets(19)
+	sender.AckNPackets(39)
 	require.Equal(t, 160*maxDatagramSize, sender.sender.GetCongestionWindow())
 
 	sender.SendAvailableSendWindow()

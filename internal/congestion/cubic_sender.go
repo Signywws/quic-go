@@ -16,7 +16,7 @@ const (
 	initialMaxDatagramSize               = protocol.ByteCount(protocol.InitialPacketSize)
 	maxBurstPackets                      = 3
 	renoBeta                             = 0.95 // QFS Reno backoff factor.
-	renoCongestionAvoidanceGrowth uint64 = 8    // QFS Reno window increases per RTT.
+	renoCongestionAvoidanceGrowth uint64 = 4    // QFS Reno window increases per RTT.
 	minCongestionWindowPackets           = 2
 	initialCongestionWindow              = 32
 )
