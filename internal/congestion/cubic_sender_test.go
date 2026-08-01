@@ -1,7 +1,6 @@
 package congestion
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -198,16 +197,15 @@ func TestCubicSenderSlowStartPacketLoss(t *testing.T) {
 
 	// Recovery phase. We need to ack every packet in the recovery window before
 	// we exit recovery.
-	numberOfPacketsInWindow := expectedSendWindow / maxDatagramSize
 	sender.AckNPackets(int(packetsInRecoveryWindow))
 	sender.SendAvailableSendWindow()
 	require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
 
-	// We need to ack an entire window before we increase CWND by 1.
-	fmt.Println(numberOfPacketsInWindow)
-	sender.AckNPackets(int(numberOfPacketsInWindow) - 2)
+	// A QFS Reno growth interval must be acknowledged before CWND grows by 1.
+	packetsUntilGrowth := int(sender.sender.renoCongestionAvoidanceAckThreshold()) -
+		int(sender.sender.numAckedPackets)
+	sender.AckNPackets(packetsUntilGrowth - 1)
 	sender.SendAvailableSendWindow()
-	fmt.Println(sender.clock.Now())
 	require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
 
 	// Next ack should increase cwnd by 1.
@@ -255,10 +253,17 @@ func TestCubicSenderSlowStartPacketLossPRR(t *testing.T) {
 		sender.SendAvailableSendWindow()
 		require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
 	}
+	for sender.sender.InRecovery() {
+		sender.AckNPackets(1)
+		sender.SendAvailableSendWindow()
+		require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
+	}
 
-	// We need to ack another window before we increase CWND by 1.
-	numberOfPacketsInWindow := expectedSendWindow / maxDatagramSize
-	for range numberOfPacketsInWindow {
+	// A QFS Reno growth interval must be acknowledged before CWND grows by 1.
+	sender.SendAvailableSendWindow()
+	packetsUntilGrowth := int(sender.sender.renoCongestionAvoidanceAckThreshold()) -
+		int(sender.sender.numAckedPackets)
+	for range packetsUntilGrowth - 1 {
 		sender.AckNPackets(1)
 		require.Equal(t, 1, sender.SendAvailableSendWindow())
 		require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
@@ -267,6 +272,26 @@ func TestCubicSenderSlowStartPacketLossPRR(t *testing.T) {
 	sender.AckNPackets(1)
 	expectedSendWindow += maxDatagramSize
 	require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())
+}
+
+func TestRenoCongestionAvoidanceGrowth(t *testing.T) {
+	sender := newTestCubicSender(false)
+	sender.sender.congestionWindow = 160 * maxDatagramSize
+	sender.sender.slowStartThreshold = sender.sender.congestionWindow
+	sender.SendAvailableSendWindow()
+
+	require.Equal(
+		t,
+		uint64(20),
+		sender.sender.renoCongestionAvoidanceAckThreshold(),
+	)
+
+	sender.AckNPackets(19)
+	require.Equal(t, 160*maxDatagramSize, sender.sender.GetCongestionWindow())
+
+	sender.SendAvailableSendWindow()
+	sender.AckNPackets(1)
+	require.Equal(t, 161*maxDatagramSize, sender.sender.GetCongestionWindow())
 }
 
 func TestCubicSenderSlowStartBurstPacketLossPRR(t *testing.T) {
@@ -427,9 +452,10 @@ func TestCubicSender1ConnectionCongestionAvoidanceAtEndOfRecovery(t *testing.T) 
 	}
 	require.False(t, sender.sender.InRecovery())
 
-	// Out of recovery now. Congestion window should not grow until a full
-	// congestion window worth of packets has been acknowledged.
-	packetsUntilGrowth := int(expectedSendWindow/maxDatagramSize) - int(sender.sender.numAckedPackets)
+	// Out of recovery now. Congestion window should not grow until a QFS Reno
+	// growth interval worth of packets has been acknowledged.
+	packetsUntilGrowth := int(sender.sender.renoCongestionAvoidanceAckThreshold()) -
+		int(sender.sender.numAckedPackets)
 	sender.SendAvailableSendWindow()
 	sender.AckNPackets(packetsUntilGrowth - 1)
 	require.Equal(t, expectedSendWindow, sender.sender.GetCongestionWindow())

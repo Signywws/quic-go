@@ -13,11 +13,12 @@ import (
 const (
 	// maxDatagramSize is the default maximum packet size used in the Linux TCP implementation.
 	// Used in QUIC for congestion window computations in bytes.
-	initialMaxDatagramSize     = protocol.ByteCount(protocol.InitialPacketSize)
-	maxBurstPackets            = 3
-	renoBeta                   = 0.95 // QFS Reno backoff factor.
-	minCongestionWindowPackets = 2
-	initialCongestionWindow    = 32
+	initialMaxDatagramSize               = protocol.ByteCount(protocol.InitialPacketSize)
+	maxBurstPackets                      = 3
+	renoBeta                             = 0.95 // QFS Reno backoff factor.
+	renoCongestionAvoidanceGrowth uint64 = 8    // QFS Reno window increases per RTT.
+	minCongestionWindowPackets           = 2
+	initialCongestionWindow              = 32
 )
 
 type cubicSender struct {
@@ -250,11 +251,17 @@ func (c *cubicSender) maybeIncreaseCwnd(
 	// Congestion avoidance
 	c.maybeQlogStateChange(qlog.CongestionStateCongestionAvoidance)
 	if c.reno {
-		// Classic Reno congestion avoidance.
+		// QFS Reno congestion avoidance. Classic Reno increases the congestion
+		// window by one maximum datagram per RTT. QFS performs multiple evenly
+		// spaced increases per RTT to recover and probe high-BDP paths faster.
 		c.numAckedPackets++
-		if c.numAckedPackets >= uint64(c.congestionWindow/c.maxDatagramSize) {
-			c.congestionWindow += c.maxDatagramSize
-			c.numAckedPackets = 0
+		ackThreshold := c.renoCongestionAvoidanceAckThreshold()
+		if c.numAckedPackets >= ackThreshold {
+			c.congestionWindow = min(
+				c.maxCongestionWindow(),
+				c.congestionWindow+c.maxDatagramSize,
+			)
+			c.numAckedPackets -= ackThreshold
 		}
 	} else {
 		c.congestionWindow = min(
@@ -262,6 +269,18 @@ func (c *cubicSender) maybeIncreaseCwnd(
 			c.cubic.CongestionWindowAfterAck(ackedBytes, c.congestionWindow, c.rttStats.MinRTT(), eventTime),
 		)
 	}
+}
+
+// renoCongestionAvoidanceAckThreshold returns the number of acknowledged
+// packets required for one maximum-datagram increase of the congestion window.
+func (c *cubicSender) renoCongestionAvoidanceAckThreshold() uint64 {
+	windowPackets := uint64(
+		(c.congestionWindow + c.maxDatagramSize - 1) / c.maxDatagramSize,
+	)
+	return max(
+		(windowPackets+renoCongestionAvoidanceGrowth-1)/renoCongestionAvoidanceGrowth,
+		uint64(1),
+	)
 }
 
 func (c *cubicSender) isCwndLimited(bytesInFlight protocol.ByteCount) bool {
