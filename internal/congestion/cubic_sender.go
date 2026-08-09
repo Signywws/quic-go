@@ -15,8 +15,8 @@ const (
 	// Used in QUIC for congestion window computations in bytes.
 	initialMaxDatagramSize               = protocol.ByteCount(protocol.InitialPacketSize)
 	maxBurstPackets                      = 3
-	renoBeta                             = 0.95 // QFS Reno backoff factor.
-	renoCongestionAvoidanceGrowth uint64 = 4    // QFS Reno window increases per RTT.
+	renoBeta                             = 0.7 // QFS Reno backoff factor.
+	renoCongestionAvoidanceGrowth uint64 = 4   // QFS Reno window increases per RTT.
 	minCongestionWindowPackets           = 2
 	initialCongestionWindow              = 32
 )
