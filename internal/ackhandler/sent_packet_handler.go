@@ -24,7 +24,7 @@ const (
 	defaultPacketThreshold protocol.PacketNumber = 3
 
 	adaptivePacketThresholdGrowthFactor protocol.PacketNumber = 2
-	maxAdaptivePacketThreshold          protocol.PacketNumber = 64 * 1024
+	maxAdaptivePacketThreshold          protocol.PacketNumber = 6 * 1024
 
 	adaptiveTimeThresholdSafetyMultiplier = 1.25
 	maxAdaptiveTimeThreshold              = 4.0
@@ -173,9 +173,11 @@ func (h *sentPacketHandler) adaptLossDetectionThresholds(
 	changed := false
 
 	if packetReordering >= h.packetThreshold {
-		targetPacketThreshold := max(
-			growPacketThreshold(h.packetThreshold),
-			growPacketThreshold(packetReordering),
+		// A single extreme reordering sample must not immediately make
+		// packet-threshold loss detection practically ineffective. Grow from
+		// the current threshold one bounded step at a time instead.
+		targetPacketThreshold := growPacketThreshold(
+			h.packetThreshold,
 		)
 
 		if targetPacketThreshold > h.packetThreshold {

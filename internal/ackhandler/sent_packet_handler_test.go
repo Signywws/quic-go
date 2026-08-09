@@ -1885,10 +1885,10 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 
 		require.True(t, changed)
 
-		// The observed packet reordering is doubled.
+		// A large observation only grows the current threshold by one step.
 		require.Equal(
 			t,
-			protocol.PacketNumber(800),
+			protocol.PacketNumber(defaultPacketThreshold*2),
 			handler.packetThreshold,
 		)
 
@@ -1939,7 +1939,7 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 		require.True(t, changed)
 		require.Equal(
 			t,
-			maxAdaptivePacketThreshold,
+			protocol.PacketNumber(defaultPacketThreshold*2),
 			handler.packetThreshold,
 		)
 		require.Equal(
@@ -1947,6 +1947,38 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 			maxAdaptiveTimeThreshold,
 			handler.timeThreshold,
 		)
+	})
+
+	t.Run("grows toward cap one step at a time", func(t *testing.T) {
+		testCases := []struct {
+			current protocol.PacketNumber
+			want    protocol.PacketNumber
+		}{
+			{current: 20, want: 40},
+			{current: 40, want: 80},
+			{current: 5 * 1024, want: maxAdaptivePacketThreshold},
+			{current: maxAdaptivePacketThreshold, want: maxAdaptivePacketThreshold},
+		}
+
+		for _, testCase := range testCases {
+			handler := &sentPacketHandler{
+				packetThreshold:       testCase.current,
+				timeThreshold:         defaultTimeThreshold,
+				adaptiveLossDetection: true,
+			}
+
+			handler.adaptLossDetectionThresholds(
+				7*1024,
+				0,
+				0,
+			)
+
+			require.Equal(
+				t,
+				testCase.want,
+				handler.packetThreshold,
+			)
+		}
 	})
 }
 
@@ -2015,10 +2047,11 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 		sendTime.Add(150*time.Millisecond),
 	)
 
-	// max(3 * 2, 40 * 2) = 80.
+	// A single large observation grows the current threshold by one step:
+	// 3 * 2 = 6.
 	require.Equal(
 		t,
-		protocol.PacketNumber(80),
+		protocol.PacketNumber(6),
 		handler.packetThreshold,
 	)
 
@@ -2035,7 +2068,7 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 		[]qlogwriter.Event{
 			qlog.LossDetectionThresholdsUpdated{
 				PreviousPacketThreshold: 3,
-				PacketThreshold:         80,
+				PacketThreshold:         6,
 				PreviousTimeThreshold:   adaptiveInitialTimeThreshold,
 				TimeThreshold:           1.875,
 				PacketReordering:        40,
