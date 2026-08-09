@@ -147,16 +147,34 @@ func WithAdaptiveLossDetection(enabled bool) SentPacketHandlerOption {
 	}
 }
 
-// growPacketThreshold exponentially increases the packet threshold while
-// preventing overflow and respecting the configured upper limit.
-func growPacketThreshold(
-	threshold protocol.PacketNumber,
+// adaptivePacketThresholdTarget chooses a threshold that covers the confirmed
+// packet reordering with a safety margin while respecting the upper limit.
+func adaptivePacketThresholdTarget(
+	current protocol.PacketNumber,
+	observed protocol.PacketNumber,
 ) protocol.PacketNumber {
-	if threshold >= maxAdaptivePacketThreshold/adaptivePacketThresholdGrowthFactor {
+	if current >= maxAdaptivePacketThreshold {
 		return maxAdaptivePacketThreshold
 	}
 
-	return threshold * adaptivePacketThresholdGrowthFactor
+	currentTarget := maxAdaptivePacketThreshold
+	if current <
+		maxAdaptivePacketThreshold/adaptivePacketThresholdGrowthFactor {
+		currentTarget =
+			current * adaptivePacketThresholdGrowthFactor
+	}
+
+	observedTarget := maxAdaptivePacketThreshold
+	if observed <
+		maxAdaptivePacketThreshold/adaptivePacketThresholdGrowthFactor {
+		observedTarget =
+			observed * adaptivePacketThresholdGrowthFactor
+	}
+
+	return min(
+		maxAdaptivePacketThreshold,
+		max(currentTarget, observedTarget),
+	)
 }
 
 // adaptLossDetectionThresholds increases loss detection thresholds after
@@ -176,8 +194,9 @@ func (h *sentPacketHandler) adaptLossDetectionThresholds(
 		// A single extreme reordering sample must not immediately make
 		// packet-threshold loss detection practically ineffective. Grow from
 		// the current threshold one bounded step at a time instead.
-		targetPacketThreshold := growPacketThreshold(
+		targetPacketThreshold := adaptivePacketThresholdTarget(
 			h.packetThreshold,
+			packetReordering,
 		)
 
 		if targetPacketThreshold > h.packetThreshold {

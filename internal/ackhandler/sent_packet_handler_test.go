@@ -1876,7 +1876,9 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 			timeThreshold:         defaultTimeThreshold,
 			adaptiveLossDetection: true,
 		}
-
+		// A confirmed spurious loss reveals the actual packet reordering.
+		// Jump toward that observation with a safety margin, but never exceed
+		// the configured upper limit.
 		changed := handler.adaptLossDetectionThresholds(
 			400,
 			150*time.Millisecond,
@@ -1885,10 +1887,9 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 
 		require.True(t, changed)
 
-		// A large observation only grows the current threshold by one step.
 		require.Equal(
 			t,
-			protocol.PacketNumber(defaultPacketThreshold*2),
+			protocol.PacketNumber(800),
 			handler.packetThreshold,
 		)
 
@@ -1939,7 +1940,7 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 		require.True(t, changed)
 		require.Equal(
 			t,
-			protocol.PacketNumber(defaultPacketThreshold*2),
+			maxAdaptivePacketThreshold,
 			handler.packetThreshold,
 		)
 		require.Equal(
@@ -1949,15 +1950,37 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 		)
 	})
 
-	t.Run("grows toward cap one step at a time", func(t *testing.T) {
+	t.Run("uses current and observed packet reordering", func(t *testing.T) {
 		testCases := []struct {
-			current protocol.PacketNumber
-			want    protocol.PacketNumber
+			current  protocol.PacketNumber
+			observed protocol.PacketNumber
+			want     protocol.PacketNumber
 		}{
-			{current: 20, want: 40},
-			{current: 40, want: 80},
-			{current: 5 * 1024, want: maxAdaptivePacketThreshold},
-			{current: maxAdaptivePacketThreshold, want: maxAdaptivePacketThreshold},
+			{
+				current:  20,
+				observed: 20,
+				want:     40,
+			},
+			{
+				current:  40,
+				observed: 40,
+				want:     80,
+			},
+			{
+				current:  20,
+				observed: 400,
+				want:     800,
+			},
+			{
+				current:  5 * 1024,
+				observed: 5 * 1024,
+				want:     maxAdaptivePacketThreshold,
+			},
+			{
+				current:  maxAdaptivePacketThreshold,
+				observed: maxAdaptivePacketThreshold,
+				want:     maxAdaptivePacketThreshold,
+			},
 		}
 
 		for _, testCase := range testCases {
@@ -1968,7 +1991,7 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 			}
 
 			handler.adaptLossDetectionThresholds(
-				7*1024,
+				testCase.observed,
 				0,
 				0,
 			)
@@ -1979,34 +2002,6 @@ func TestAdaptLossDetectionThresholds(t *testing.T) {
 				handler.packetThreshold,
 			)
 		}
-	})
-}
-
-func TestGrowPacketThreshold(t *testing.T) {
-	t.Run("doubles threshold", func(t *testing.T) {
-		require.Equal(
-			t,
-			protocol.PacketNumber(80),
-			growPacketThreshold(40),
-		)
-	})
-
-	t.Run("caps threshold", func(t *testing.T) {
-		require.Equal(
-			t,
-			maxAdaptivePacketThreshold,
-			growPacketThreshold(
-				maxAdaptivePacketThreshold,
-			),
-		)
-
-		require.Equal(
-			t,
-			maxAdaptivePacketThreshold,
-			growPacketThreshold(
-				maxAdaptivePacketThreshold/2+1,
-			),
-		)
 	})
 }
 
@@ -2034,7 +2029,7 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 	handler.lostPackets.Add(10, sendTime)
 
 	// Поздний ACK подтверждает, что пакет 10 всё-таки был доставлен.
-	// Между packet number 10 и 50 находится 40 позиций.
+	// Confirmed reordering of 40 packets gets a 2x safety margin.
 	handler.detectSpuriousLosses(
 		&wire.AckFrame{
 			AckRanges: []wire.AckRange{
@@ -2047,11 +2042,10 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 		sendTime.Add(150*time.Millisecond),
 	)
 
-	// A single large observation grows the current threshold by one step:
-	// 3 * 2 = 6.
+	// Confirmed reordering of 40 packets gets a 2x safety margin.
 	require.Equal(
 		t,
-		protocol.PacketNumber(6),
+		protocol.PacketNumber(80),
 		handler.packetThreshold,
 	)
 
@@ -2068,7 +2062,7 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 		[]qlogwriter.Event{
 			qlog.LossDetectionThresholdsUpdated{
 				PreviousPacketThreshold: 3,
-				PacketThreshold:         6,
+				PacketThreshold:         80,
 				PreviousTimeThreshold:   adaptiveInitialTimeThreshold,
 				TimeThreshold:           1.875,
 				PacketReordering:        40,
@@ -2083,4 +2077,57 @@ func TestDetectSpuriousLossesAdaptsThresholds(t *testing.T) {
 
 	// Запись удаляется после подтверждения ложной потери.
 	require.Empty(t, handler.lostPackets.lostPackets)
+}
+
+func TestAdaptivePacketThresholdTarget(t *testing.T) {
+	testCases := []struct {
+		name     string
+		current  protocol.PacketNumber
+		observed protocol.PacketNumber
+		want     protocol.PacketNumber
+	}{
+		{
+			name:     "minimum doubling",
+			current:  20,
+			observed: 20,
+			want:     40,
+		},
+		{
+			name:     "follows observed reordering",
+			current:  20,
+			observed: 100,
+			want:     200,
+		},
+		{
+			name:     "caps large observation",
+			current:  40,
+			observed: 7 * 1024,
+			want:     maxAdaptivePacketThreshold,
+		},
+		{
+			name:     "caps large current threshold",
+			current:  5 * 1024,
+			observed: 5 * 1024,
+			want:     maxAdaptivePacketThreshold,
+		},
+		{
+			name:     "stays at cap",
+			current:  maxAdaptivePacketThreshold,
+			observed: maxAdaptivePacketThreshold,
+			want:     maxAdaptivePacketThreshold,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				testCase.want,
+				adaptivePacketThresholdTarget(
+					testCase.current,
+					testCase.observed,
+				),
+			)
+		})
+	}
 }
